@@ -1,0 +1,67 @@
+# ==========================================================================
+# DMF PHP Template — .gitattributes
+# Normalizes line endings and slims down release/export archives.
+# ==========================================================================
+
+# --- Line-ending normalization --------------------------------------------
+# Treat all files as text and normalize to LF in the repository, letting Git
+# handle native checkout endings automatically.
+* text=auto eol=lf
+
+# Explicit text files (normalized to LF).
+*.php     text eol=lf
+*.phtml   text eol=lf
+*.css     text eol=lf
+*.scss    text eol=lf
+*.js      text eol=lf
+*.ts      text eol=lf
+*.json    text eol=lf
+*.xml     text eol=lf
+*.yml     text eol=lf
+*.yaml    text eol=lf
+*.md      text eol=lf
+*.txt     text eol=lf
+*.sql     text eol=lf
+*.html    text eol=lf
+*.htaccess text eol=lf
+.editorconfig text eol=lf
+.gitignore    text eol=lf
+.gitattributes text eol=lf
+
+# Windows-specific scripts keep CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# --- Binary files (never diffed or normalized) ----------------------------
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.webp binary
+*.pdf  binary
+*.woff  binary
+*.woff2 binary
+*.ttf  binary
+*.eot  binary
+*.zip  binary
+*.gz   binary
+
+# --- Export-ignore: exclude from `git archive` release artifacts ----------
+# These development-only assets should not ship inside distribution archives.
+/.github         export-ignore
+/docs            export-ignore
+/tests           export-ignore
+/.editorconfig   export-ignore
+/.gitattributes  export-ignore
+/.gitignore      export-ignore
+/.env.example    export-ignore
+/phpstan.neon.dist export-ignore
+/phpunit.xml.dist  export-ignore
+/CONTRIBUTING.md export-ignore
+/CHANGELOG.md    export-ignore
+
+# --- Language statistics (GitHub Linguist) --------------------------------
+# Keep vendored/generated code out of repository language stats.
+/vendor/**  linguist-vendored
+/docs/**    linguist-documentation

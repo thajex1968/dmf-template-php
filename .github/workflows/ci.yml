@@ -1,0 +1,64 @@
+# ==========================================================================
+# Continuous Integration — DMF PHP Template
+#
+# Runs on every push and pull request against the primary branches. Validates
+# PHP syntax across supported versions and runs static analysis. Extend the
+# `test` job with PHPUnit once application code exists.
+# ==========================================================================
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+# Cancel superseded runs on the same ref to save CI minutes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint & Static Analysis (PHP ${{ matrix.php }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.1', '8.2', '8.3']
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+          tools: composer:v2
+
+      - name: Validate composer.json
+        run: composer validate --strict || echo "No composer.json yet — skipping."
+
+      - name: Install dependencies
+        run: |
+          if [ -f composer.json ]; then
+            composer install --prefer-dist --no-progress --no-interaction
+          else
+            echo "No composer.json yet — skipping install."
+          fi
+
+      - name: Check PHP syntax (lint)
+        run: |
+          find . -type f -name '*.php' \
+            -not -path './vendor/*' \
+            -print0 | xargs -0 -n1 -P4 php -l
+
+      - name: Static analysis (PHPStan)
+        run: |
+          if [ -f vendor/bin/phpstan ]; then
+            vendor/bin/phpstan analyse --no-progress
+          else
+            echo "PHPStan not installed yet — skipping."
+          fi

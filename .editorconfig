@@ -1,0 +1,34 @@
+# EditorConfig — https://editorconfig.org
+# Enforces a consistent coding style across every editor and IDE in the DMF ecosystem.
+
+# Top-most EditorConfig file: stop searching parent directories.
+root = true
+
+# Baseline applied to every file in the repository.
+[*]
+charset = utf-8
+end_of_line = lf
+indent_style = space
+indent_size = 4
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+# PHP source files (PSR-12: 4-space indent, LF).
+[*.php]
+indent_size = 4
+
+# Web front-end assets commonly use a 2-space indent.
+[*.{js,ts,css,scss,html,json,yml,yaml,xml}]
+indent_size = 2
+
+# Markdown: trailing whitespace can be significant (hard line breaks).
+[*.md]
+trim_trailing_whitespace = false
+
+# Makefiles require real tabs.
+[Makefile]
+indent_style = tab
+
+# Windows batch files conventionally use CRLF.
+[*.{bat,cmd}]
+end_of_line = crlf

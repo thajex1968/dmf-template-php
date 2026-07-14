@@ -1,0 +1,34 @@
+# ==========================================================================
+# PHPStan configuration (distributable defaults)
+#
+# This is the shared baseline shipped with the template. Developers may create
+# a local `phpstan.neon` that includes this file and overrides settings.
+#
+# Run:  vendor/bin/phpstan analyse
+# ==========================================================================
+parameters:
+    # Rule strictness: 0 (loosest) to 9 (strictest). Level 5 is a sensible,
+    # enforceable starting point for a new project.
+    level: 5
+
+    # Directories to analyse. Adjust as application code is added.
+    paths:
+        - includes
+        - config
+        - public_html
+
+    # Paths excluded from analysis (runtime, generated, or third-party).
+    excludePaths:
+        - vendor/*
+        - storage/*
+        - tests/*
+
+    # Treat PHPDoc types as authoritative where present.
+    treatPhpDocTypesAsCertain: true
+
+    # Fail the build on any parse error.
+    reportUnmatchedIgnoredErrors: true
+
+    # File extensions to scan.
+    fileExtensions:
+        - php

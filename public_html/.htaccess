@@ -1,0 +1,35 @@
+# ==========================================================================
+# public_html/.htaccess — baseline hardening for the web root
+#
+# public_html/ is the ONLY directory exposed as the Apache document root.
+# Everything else (config/, includes/, storage/, database/) lives above it and
+# is unreachable over HTTP.
+# ==========================================================================
+
+# Disable directory listing.
+Options -Indexes
+
+# Block access to hidden/dotfiles (.env, .git, .htaccess, etc.).
+<FilesMatch "^\.">
+    Require all denied
+</FilesMatch>
+
+# Also block common sensitive extensions if ever placed under the web root.
+<FilesMatch "\.(env|ini|log|sql|sh|bak|dist|neon)$">
+    Require all denied
+</FilesMatch>
+
+# Security response headers.
+<IfModule mod_headers.c>
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set X-Frame-Options "SAMEORIGIN"
+    Header always set Referrer-Policy "strict-origin-when-cross-origin"
+    Header always set X-XSS-Protection "1; mode=block"
+    # Uncomment on HTTPS-only deployments:
+    # Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains"
+</IfModule>
+
+# Do not expose PHP version via headers.
+<IfModule mod_php.c>
+    php_flag expose_php off
+</IfModule>

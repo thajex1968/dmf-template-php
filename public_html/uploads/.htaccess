@@ -1,0 +1,20 @@
+# ==========================================================================
+# public_html/uploads/.htaccess
+#
+# User-uploaded, web-servable public assets (e.g. avatars) live here. Private
+# or sensitive files must go in the git-ignored /storage/uploads/ instead.
+#
+# Critical: never allow uploaded files to execute as code.
+# ==========================================================================
+
+# Serve as static content only — disable any script handlers.
+<IfModule mod_php.c>
+    php_flag engine off
+</IfModule>
+
+<FilesMatch "\.(php|phtml|php3|php4|php5|php7|phar|pl|py|cgi|asp|aspx|sh|exe)$">
+    Require all denied
+</FilesMatch>
+
+Options -Indexes -ExecCGI
+RemoveHandler .php .phtml .phar

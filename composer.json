@@ -1,0 +1,39 @@
+{
+    "name": "dmf/dmf-template-php",
+    "description": "The official parent template for every PHP application in the DMF ecosystem — structure, standards, tooling, and a business-logic-free architecture skeleton.",
+    "type": "project",
+    "license": "MIT",
+    "keywords": ["template", "php", "dmf", "skeleton", "boilerplate"],
+    "require": {
+        "php": ">=8.1"
+    },
+    "require-dev": {
+        "phpstan/phpstan": "^1.11",
+        "phpunit/phpunit": "^10.5",
+        "friendsofphp/php-cs-fixer": "^3.58"
+    },
+    "config": {
+        "sort-packages": true,
+        "optimize-autoloader": true
+    },
+    "scripts": {
+        "lint": "find . -type f -name '*.php' -not -path './vendor/*' -print0 | xargs -0 -n1 -P4 php -l",
+        "analyse": "phpstan analyse --no-progress",
+        "test": "phpunit",
+        "cs": "php-cs-fixer fix --dry-run --diff",
+        "cs:fix": "php-cs-fixer fix",
+        "check": [
+            "@lint",
+            "@analyse",
+            "@test"
+        ]
+    },
+    "scripts-descriptions": {
+        "lint": "Syntax-check every PHP file.",
+        "analyse": "Run PHPStan static analysis.",
+        "test": "Run the PHPUnit test suite.",
+        "cs": "Report PSR-12 coding-standard violations.",
+        "cs:fix": "Auto-fix coding-standard violations.",
+        "check": "Run lint + static analysis + tests."
+    }
+}

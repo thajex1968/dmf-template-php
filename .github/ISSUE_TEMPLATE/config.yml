@@ -1,0 +1,7 @@
+# Issue template chooser configuration.
+# Disables blank issues to encourage using a structured template.
+blank_issues_enabled: false
+contact_links:
+  - name: DMF Development Team
+    url: https://dmf.ac.th
+    about: For general questions, please contact the DMF development team.
