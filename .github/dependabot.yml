@@ -1,0 +1,57 @@
+# ==========================================================================
+# Dependabot — DMF PHP Template
+#
+# Automated dependency-update pull requests. Two ecosystems are tracked:
+#   1. composer         — PHP dev tooling (PHPStan, PHPUnit, PHP-CS-Fixer)
+#   2. github-actions    — action versions pinned in .github/workflows/*
+#
+# Docs: https://docs.github.com/code-security/dependabot/dependabot-version-updates
+# ==========================================================================
+version: 2
+
+updates:
+  # --- PHP / Composer dependencies ----------------------------------------
+  - package-ecosystem: "composer"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "07:00"
+      timezone: "Asia/Bangkok"
+    # Group all dev-tooling bumps into a single PR to reduce review noise.
+    groups:
+      dev-tooling:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "php"
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+    # This template pins a >=8.1 floor; ignore major bumps that could break
+    # backward compatibility for downstream applications (review manually).
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
+
+  # --- GitHub Actions -----------------------------------------------------
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "07:00"
+      timezone: "Asia/Bangkok"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "github-actions"
+    commit-message:
+      prefix: "chore(ci)"
+      include: "scope"

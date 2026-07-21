@@ -11,6 +11,11 @@ parameters:
     # enforceable starting point for a new project.
     level: 5
 
+    # Analyse against the MINIMUM supported PHP version (8.1) so that any use of
+    # 8.2/8.3-only syntax is flagged. Primary development may target newer PHP,
+    # but template code must remain compatible with the >=8.1 Composer floor.
+    phpVersion: 80100
+
     # Directories to analyse. Adjust as application code is added.
     paths:
         - includes

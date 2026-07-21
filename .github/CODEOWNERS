@@ -1,0 +1,44 @@
+# ==========================================================================
+# CODEOWNERS — DMF PHP Template
+#
+# Defines who is automatically requested for review when matching files change.
+# GitHub uses the LAST matching pattern, so order from most general to most
+# specific. Owners must have write access to the repository.
+#
+# Docs: https://docs.github.com/articles/about-code-owners
+#
+# NOTE: Replace the placeholder team/handle below with your real GitHub org
+# team (e.g. @your-org/platform-maintainers) or individual (@username).
+# ==========================================================================
+
+# --- Default owners -------------------------------------------------------
+# Fallback owner for everything not matched by a more specific rule below.
+*                       @dmf-platform/maintainers
+
+# --- Platform governance & architecture -----------------------------------
+# Changes to governance, ADRs, and AI rules require architecture review.
+/.claude/               @dmf-platform/architects
+/docs/ai/               @dmf-platform/architects
+/ARCHITECTURE.md        @dmf-platform/architects
+/ROADMAP.md             @dmf-platform/architects
+/AUTHENTICATION.md      @dmf-platform/architects
+/CLASS_DIAGRAM.md       @dmf-platform/architects
+
+# --- Framework skeleton ---------------------------------------------------
+# The include-chain runtime is the heart of the template.
+/includes/              @dmf-platform/maintainers
+/config/                @dmf-platform/maintainers
+/database/              @dmf-platform/maintainers
+
+# --- Security-sensitive surfaces ------------------------------------------
+/SECURITY.md            @dmf-platform/security
+/ACL.md                 @dmf-platform/security
+/.env.example           @dmf-platform/security
+
+# --- CI / tooling / repo standards ----------------------------------------
+# Build, automation, and quality-gate configuration.
+/.github/               @dmf-platform/maintainers
+/composer.json          @dmf-platform/maintainers
+/phpstan.neon.dist      @dmf-platform/maintainers
+/phpunit.xml.dist       @dmf-platform/maintainers
+/.php-cs-fixer.dist.php @dmf-platform/maintainers
