@@ -48,6 +48,16 @@ references.
 
 ---
 
+## Documentation
+
+This repository contains comprehensive technical documentation.
+
+- **[Documentation Index](./docs/INDEX.md)** — the complete documentation map.
+- **[Quick Start](./docs/QUICK_START.md)** — clone to first module in six steps.
+- **[Learning Path](./docs/LEARNING_PATH.md)** — a guided reading order.
+
+---
+
 ## Features
 
 - ✅ **Standardized directory structure** shared across all DMF PHP projects.
