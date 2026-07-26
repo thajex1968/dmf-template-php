@@ -217,6 +217,10 @@ final class ReleaseVerifier
         $manifest = $zip->getFromName('composer.json');
         $this->assertManifest($manifest === false ? null : $manifest);
 
+        // V9 — provenance must travel inside the package.
+        $buildInfo = $zip->getFromName('BUILD_INFO.json');
+        $this->assertProvenance($buildInfo === false ? null : $buildInfo);
+
         // V7 — development files must not have shipped.
         $leaked = array_values(array_filter(
             FORBIDDEN_VENDOR_PATHS,
@@ -321,6 +325,10 @@ final class ReleaseVerifier
         // V5
         $manifest = @file_get_contents($root . '/composer.json');
         $this->assertManifest($manifest === false ? null : $manifest);
+
+        // V9
+        $buildInfo = @file_get_contents($root . '/BUILD_INFO.json');
+        $this->assertProvenance($buildInfo === false ? null : $buildInfo);
 
         // V7
         $leaked = array_values(array_filter(
@@ -501,6 +509,88 @@ final class ReleaseVerifier
         }
 
         $this->pass('V5', 'Packaged composer.json declares no path repository');
+    }
+
+    /**
+     * V9 — provenance must travel inside the package.
+     *
+     * On DirectAdmin there is no SSH, no Composer and no git. BUILD_INFO.json
+     * is the only way to answer "what is actually running here?" months after a
+     * deployment — and, critically, which dmf/core it was built against, which
+     * is the first question when a library bug is suspected.
+     *
+     * A package without it is deployable but not diagnosable, so this is a hard
+     * gate rather than a warning.
+     */
+    private function assertProvenance(?string $json): void
+    {
+        if ($json === null || $json === '') {
+            $this->fail('V9', 'BUILD_INFO.json is missing — the package carries no provenance.');
+            $this->detail('Without it, nobody can tell what is deployed on a server that has');
+            $this->detail('no SSH, no git and no Composer. Build via scripts/build-release.sh.');
+
+            return;
+        }
+
+        $info = json_decode($json, true);
+
+        if (!is_array($info)) {
+            $this->fail('V9', 'BUILD_INFO.json is not valid JSON.');
+
+            return;
+        }
+
+        $required = ['version', 'git_commit', 'build_time_utc', 'builder'];
+        $missing  = array_values(array_filter(
+            $required,
+            static fn (string $k): bool => ($info[$k] ?? '') === '',
+        ));
+
+        if ($missing !== []) {
+            $this->fail('V9', sprintf(
+                'BUILD_INFO.json is incomplete — missing: %s',
+                implode(', ', $missing),
+            ));
+
+            return;
+        }
+
+        $this->pass('V9', sprintf(
+            'Provenance present — %s @ %s, built %s by %s',
+            $info['version'],
+            substr((string) ($info['git_commit_short'] ?? $info['git_commit']), 0, 12),
+            $info['build_time_utc'],
+            $info['builder'],
+        ));
+
+        // The dependency record is what ties a deployment to the exact library
+        // bytes it shipped with — Composer records shasum:"" for GitHub
+        // zipballs, so this is the only such checksum available.
+        $core = $info['dependencies']['dmf/core'] ?? null;
+
+        if (!is_array($core)) {
+            $this->detail('No dmf/core dependency record — cannot tie this build to a library version.');
+
+            return;
+        }
+
+        $this->detail(sprintf(
+            'dmf/core %s via %s',
+            $core['version'] ?? '?',
+            $core['install_source'] ?? '?',
+        ));
+
+        if (($core['install_source'] ?? '') === 'path') {
+            $this->fail('V9', 'BUILD_INFO records dmf/core installed from a path repository.');
+            $this->detail('The package was built in development mode. Rebuild after');
+            $this->detail('composer dmf:release.');
+
+            return;
+        }
+
+        if (($core['content_sha256'] ?? '') !== '' && $core['content_sha256'] !== 'unknown') {
+            $this->detail(sprintf('content_sha256 %s…', substr((string) $core['content_sha256'], 0, 16)));
+        }
     }
 
     /**

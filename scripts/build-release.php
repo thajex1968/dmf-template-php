@@ -270,18 +270,37 @@ final class ReleaseBuilder
         }
     }
 
+    /**
+     * Write provenance into the package.
+     *
+     * On DirectAdmin there is no SSH, no Composer and no git, so this file is
+     * the only way to answer "what is actually running here?" months after a
+     * deployment — and, critically, which dmf/core it was built against, which
+     * is the first question when a library bug is suspected.
+     *
+     * Verified by gate V9 in scripts/verify-release.php.
+     */
     private function writeBuildInfo(): void
     {
+        $env = static fn (string $k): string => (string) (getenv($k) ?: '');
+
         $info = [
-            'name'       => $this->manifest['name'] ?? 'dmf/app',
-            'version'    => $this->version,
-            'build_time' => gmdate('Y-m-d\TH:i:s\Z'),
-            'git_commit' => $this->git('rev-parse --short HEAD'),
-            'git_branch' => $this->git('rev-parse --abbrev-ref HEAD'),
-            'builder'    => 'scripts/build-release.php',
-            'php_build'  => PHP_VERSION,
-            'mode'       => 'release',
-            'zip_layout' => 'flat (extract into ~/public_html/)',
+            'application'      => $this->manifest['name'] ?? 'dmf/app',
+            'version'          => $this->version,
+            'tag'              => $this->git('describe --tags --exact-match'),
+            'git_commit'       => $this->git('rev-parse HEAD'),
+            'git_commit_short' => $this->git('rev-parse --short HEAD'),
+            'git_branch'       => $this->git('rev-parse --abbrev-ref HEAD'),
+            'build_time_utc'   => gmdate('Y-m-d\TH:i:s\Z'),
+            'builder'          => $env('GITHUB_ACTIONS') !== ''
+                ? 'GitHub Actions'
+                : 'scripts/build-release.php',
+            'github_run_id'     => $env('GITHUB_RUN_ID'),
+            'source_repository' => $env('GITHUB_REPOSITORY'),
+            'php_build'         => PHP_VERSION,
+            'mode'              => 'release',
+            'dependencies'      => ['dmf/core' => $this->coreProvenance()],
+            'zip_layout'        => 'flat (extract into ~/public_html/)',
         ];
 
         file_put_contents(
@@ -289,7 +308,68 @@ final class ReleaseBuilder
             json_encode($info, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n",
         );
 
-        $this->ok(sprintf('BUILD_INFO.json — %s @ %s', $this->version, $info['git_commit']));
+        $this->ok(sprintf('BUILD_INFO.json — %s @ %s', $this->version, $info['git_commit_short']));
+        $this->ok(sprintf(
+            '  dmf/core %s via %s — sha %s…',
+            $info['dependencies']['dmf/core']['version'],
+            $info['dependencies']['dmf/core']['install_source'],
+            substr($info['dependencies']['dmf/core']['content_sha256'], 0, 12),
+        ));
+    }
+
+    /**
+     * Record which dmf/core was actually packaged.
+     *
+     * Read from the STAGED install rather than the working tree, since the
+     * staged tree is what is being packaged. content_sha256 fingerprints the
+     * payload — Composer records shasum:"" for GitHub zipballs, so this is the
+     * only checksum tying a deployment to the exact library bytes it shipped
+     * with.
+     *
+     * @return array{version: string, install_source: string, content_sha256: string}
+     */
+    private function coreProvenance(): array
+    {
+        $result = [
+            'version'        => 'unknown',
+            'install_source' => 'unknown',
+            'content_sha256' => 'unknown',
+        ];
+
+        $installed = $this->staging . '/vendor/composer/installed.json';
+
+        if (is_file($installed)) {
+            $decoded  = json_decode((string) file_get_contents($installed), true);
+            $packages = $decoded['packages'] ?? $decoded;
+
+            foreach (is_array($packages) ? $packages : [] as $package) {
+                if (!is_array($package) || ($package['name'] ?? '') !== 'dmf/core') {
+                    continue;
+                }
+                $result['version']        = (string) ($package['version'] ?? 'unknown');
+                $result['install_source'] = (string) ($package['dist']['type'] ?? 'none');
+                break;
+            }
+        }
+
+        $coreDir = $this->staging . '/vendor/dmf/core';
+
+        if (is_dir($coreDir)) {
+            $files = [];
+            foreach ($this->walk($coreDir) as $file) {
+                $files[] = $file;
+            }
+            sort($files);
+
+            $hash = hash_init('sha256');
+            foreach ($files as $file) {
+                hash_update($hash, str_replace('\\', '/', substr($file, strlen($coreDir) + 1)));
+                hash_update_file($hash, $file);
+            }
+            $result['content_sha256'] = hash_final($hash);
+        }
+
+        return $result;
     }
 
     // ── Verification ────────────────────────────────────────────────────────
