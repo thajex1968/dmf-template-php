@@ -137,21 +137,25 @@ button, or clone it directly:
 
 ```bash
 # 1. Create your project from the template
-git clone https://github.com/dmf/dmf-template-php.git my-service
+git clone https://github.com/thajex1968/dmf-template-php.git my-service
 cd my-service
 
-# 2. Configure the environment
+# 2. Authenticate against the private dmf/core repository (once per machine)
+composer config --global --auth github-oauth.github.com <your-PAT>
+
+# 3. Configure the environment
 cp .env.example .env
 #    → edit .env and fill in your real values
 
-# 3. Install dev tooling (PHPStan, PHPUnit, PHP-CS-Fixer)
+# 4. Install dependencies — release mode, dmf/core as real files
 composer install
 
-# 4. Point your web server document root at:
+# 5. Point your web server document root at:
 #    /path/to/my-service/public_html
 
-# 5. Run static analysis
-vendor/bin/phpstan analyse
+# 6. Confirm everything resolved
+composer dmf:status
+composer check
 ```
 
 Ensure the `storage/` subdirectories are **writable** by the web server:
@@ -159,6 +163,48 @@ Ensure the `storage/` subdirectories are **writable** by the web server:
 ```bash
 chmod -R 775 storage
 ```
+
+---
+
+## Development and Release Modes
+
+This template depends on [`dmf/core`](https://github.com/thajex1968/dmf-core),
+and how that dependency is installed differs between working on it and shipping
+it. The distinction is not cosmetic — getting it wrong takes production down.
+
+| | Development mode | Release mode |
+|---|---|---|
+| Activated by | `composer dmf:dev` | nothing — it is the default |
+| `dmf/core` from | `../dmf-core` (path repository) | Git tag (`vcs` repository) |
+| `vendor/dmf/core` | symlink / junction | **real files** |
+| Edit-to-effect | immediate | needs a new `dmf/core` tag |
+| Manifest | `composer-dev.json` (git-ignored) | `composer.json` (committed) |
+| Safe to package | **no** | yes |
+
+**The committed `composer.json` never declares a `type: path` repository.**
+Composer satisfies a path repository with a symlink, and a symlink does not
+survive ZIP → upload → extract on shared hosting: `vendor/dmf/core` arrives
+empty and the application dies with
+`Class "Dmf\Core\Security\Sanitizer" not found`.
+
+Development mode is therefore opt-in and writes only git-ignored files, so a
+path repository can never be committed and can never reach a build.
+
+```bash
+composer dmf:dev        # develop against the sibling ../dmf-core checkout
+composer dmf:status     # which mode am I in?
+composer dmf:release    # back to real files
+composer dmf:build      # build the deployable ZIP
+composer dmf:verify -- --zip release/*.zip
+```
+
+Full detail: [`docs/platform/`](docs/platform/) —
+[Development](docs/platform/DEVELOPMENT_MODE.md) ·
+[Production](docs/platform/PRODUCTION_MODE.md) ·
+[Release pipeline](docs/platform/RELEASE_PIPELINE.md) ·
+[Deployment](docs/platform/DEPLOYMENT_GUIDE.md) ·
+[DirectAdmin](docs/platform/DIRECTADMIN_GUIDE.md) ·
+[Migration](docs/platform/MIGRATION.md)
 
 ---
 

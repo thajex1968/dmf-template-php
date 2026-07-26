@@ -1,0 +1,260 @@
+# ==========================================================================
+#  Release — tag to published, verified, deployable package
+#
+#  Triggered by a semver tag:  v1.2.0   v1.2.0-rc.1
+#
+#    validate-tag → changelog-check → quality-gates → build → verify → release
+#
+#  Every stage is blocking, and `verify` is never continue-on-error: it is the
+#  stage that catches a symlinked vendor/dmf/core, which is the defect that
+#  took production down and motivated this pipeline.
+#
+#  To cut a release:
+#    1. add a "## [1.2.0] — YYYY-MM-DD" section to CHANGELOG.md
+#    2. update VERSION
+#    3. git tag v1.2.0 && git push origin main --tags
+# ==========================================================================
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+*'
+
+permissions:
+  contents: write
+
+jobs:
+  # ────────────────────────────────────────────────────────────────────────
+  #  1. Tag validation
+  # ────────────────────────────────────────────────────────────────────────
+  validate-tag:
+    name: Validate Tag
+    runs-on: ubuntu-latest
+    outputs:
+      version:    ${{ steps.parse.outputs.version }}
+      prerelease: ${{ steps.parse.outputs.prerelease }}
+
+    steps:
+      - name: Parse and validate the semver tag
+        id: parse
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+
+          if ! echo "$TAG" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9]+(\.[0-9]+)*)?$'; then
+            echo "::error::Tag '$TAG' is not strict semver."
+            echo "::error::Valid: v1.2.0  v1.2.0-rc.1  v2.0.0-alpha.3"
+            exit 1
+          fi
+
+          VERSION="${TAG#v}"
+          PRERELEASE="false"
+          echo "$TAG" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+-.+$' && PRERELEASE="true"
+
+          echo "version=${VERSION}"       >> "$GITHUB_OUTPUT"
+          echo "prerelease=${PRERELEASE}" >> "$GITHUB_OUTPUT"
+          echo "✅ $TAG → version=$VERSION prerelease=$PRERELEASE"
+
+  # ────────────────────────────────────────────────────────────────────────
+  #  2. The release must be documented, and VERSION must agree with the tag
+  # ────────────────────────────────────────────────────────────────────────
+  changelog-check:
+    name: Changelog & Version
+    runs-on: ubuntu-latest
+    needs: validate-tag
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify the CHANGELOG entry
+        run: |
+          VERSION="${{ needs.validate-tag.outputs.version }}"
+          if ! grep -qF "## [$VERSION]" CHANGELOG.md; then
+            echo "::error::No '## [$VERSION]' section in CHANGELOG.md"
+            echo "Add before tagging:"
+            echo "  ## [$VERSION] — $(date -u +%Y-%m-%d)"
+            exit 1
+          fi
+          echo "  ✓ CHANGELOG documents $VERSION"
+
+      - name: Verify the VERSION file matches the tag
+        run: |
+          VERSION="${{ needs.validate-tag.outputs.version }}"
+          FILE="$(tr -d '[:space:]' < VERSION)"
+          if [ "$FILE" != "$VERSION" ]; then
+            echo "::error::VERSION file says '$FILE' but the tag says '$VERSION'."
+            echo "::error::BUILD_INFO.json would then misreport what is deployed."
+            exit 1
+          fi
+          echo "  ✓ VERSION file agrees with the tag"
+
+  # ────────────────────────────────────────────────────────────────────────
+  #  3. Quality gates on the release commit
+  # ────────────────────────────────────────────────────────────────────────
+  quality-gates:
+    name: Quality Gates (PHP ${{ matrix.php }})
+    runs-on: ubuntu-latest
+    needs: validate-tag
+    strategy:
+      fail-fast: true
+      matrix:
+        php: ['8.1', '8.2', '8.3']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP ${{ matrix.php }}
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: zip, pdo, pdo_mysql, json, hash
+          tools: composer:v2
+          coverage: none
+
+      - name: Validate composer.json
+        run: composer validate --strict
+
+      - name: Install dependencies
+        env:
+          COMPOSER_AUTH: '{"github-oauth":{"github.com":"${{ secrets.DMF_CORE_TOKEN }}"}}'
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Security audit
+        run: composer audit --no-interaction
+        continue-on-error: true
+
+      - name: Lint
+        run: composer lint
+
+      - name: Coding standard
+        if: matrix.php == '8.3'
+        run: composer cs
+
+      - name: Static analysis
+        if: matrix.php == '8.3'
+        run: composer analyse
+
+      - name: Tests
+        run: composer test
+
+  # ────────────────────────────────────────────────────────────────────────
+  #  4. Build the deployable package
+  # ────────────────────────────────────────────────────────────────────────
+  build:
+    name: Build Package
+    runs-on: ubuntu-latest
+    needs: [validate-tag, changelog-check, quality-gates]
+    outputs:
+      artifact: ${{ steps.package.outputs.artifact }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: zip, pdo, json, hash
+          tools: composer:v2
+          coverage: none
+
+      - name: Build
+        id: package
+        env:
+          COMPOSER_AUTH: '{"github-oauth":{"github.com":"${{ secrets.DMF_CORE_TOKEN }}"}}'
+        run: |
+          VERSION="${{ needs.validate-tag.outputs.version }}"
+          php scripts/build-release.php "$VERSION"
+          echo "artifact=release-package-${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload the package
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.artifact }}
+          path: |
+            release/*.zip
+            release/SHA256SUMS.txt
+          retention-days: 90
+          if-no-files-found: error
+
+  # ────────────────────────────────────────────────────────────────────────
+  #  5. Verify the artifact — the gate that must never be skipped
+  # ────────────────────────────────────────────────────────────────────────
+  verify:
+    name: Verify
+    needs: build
+    uses: ./.github/workflows/verify-release.yml
+    with:
+      artifact-name: ${{ needs.build.outputs.artifact }}
+
+  # ────────────────────────────────────────────────────────────────────────
+  #  6. Publish
+  # ────────────────────────────────────────────────────────────────────────
+  release:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    needs: [validate-tag, build, verify]
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download the verified package
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build.outputs.artifact }}
+          path: release
+
+      - name: Extract the CHANGELOG section
+        id: notes
+        run: |
+          VERSION="${{ needs.validate-tag.outputs.version }}"
+          NOTES=$(awk \
+            "/^## \[${VERSION}\]/{found=1; next} found && /^## \[/{exit} found{print}" \
+            CHANGELOG.md)
+          {
+            echo 'notes<<NOTES_EOF'
+            echo "$NOTES"
+            echo 'NOTES_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "v${{ needs.validate-tag.outputs.version }}"
+          body: |
+            ${{ steps.notes.outputs.notes }}
+
+            ---
+
+            ### Deployment
+
+            This package is **self-contained** — `vendor/` is already installed
+            with an optimised autoloader. No Composer and no SSH are needed on
+            the server.
+
+            1. Download the ZIP and `SHA256SUMS.txt`
+            2. Verify: `sha256sum -c SHA256SUMS.txt`
+            3. Upload into `~/public_html/` and extract **inside** it
+            4. Configure `.env`, import any new migrations
+
+            See [DIRECTADMIN_GUIDE.md](docs/platform/DIRECTADMIN_GUIDE.md).
+
+            ### Verified before publishing
+
+            No symlinks · `vendor/dmf/core` real files ·
+            `Dmf\Core\Security\Sanitizer` resolves · no path repository ·
+            no development files shipped
+
+            **Full changelog:** https://github.com/${{ github.repository }}/blob/v${{ needs.validate-tag.outputs.version }}/CHANGELOG.md
+          draft: false
+          prerelease: ${{ needs.validate-tag.outputs.prerelease == 'true' }}
+          files: |
+            release/*.zip
+            release/SHA256SUMS.txt
+          fail_on_unmatched_files: true

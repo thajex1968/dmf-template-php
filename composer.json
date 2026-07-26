@@ -4,13 +4,28 @@
     "type": "project",
     "license": "MIT",
     "keywords": ["template", "php", "dmf", "skeleton", "boilerplate"],
+    "homepage": "https://github.com/thajex1968/dmf-template-php",
+    "support": {
+        "issues": "https://github.com/thajex1968/dmf-template-php/issues",
+        "source": "https://github.com/thajex1968/dmf-template-php"
+    },
+    "repositories": [
+        {
+            "type": "vcs",
+            "url": "https://github.com/thajex1968/dmf-core.git"
+        }
+    ],
     "require": {
-        "php": ">=8.1"
+        "php": ">=8.1",
+        "ext-hash": "*",
+        "ext-json": "*",
+        "ext-pdo": "*",
+        "dmf/core": "^1.1"
     },
     "require-dev": {
+        "friendsofphp/php-cs-fixer": "^3.58",
         "phpstan/phpstan": "^1.11",
-        "phpunit/phpunit": "^10.5",
-        "friendsofphp/php-cs-fixer": "^3.58"
+        "phpunit/phpunit": "^10.5"
     },
     "config": {
         "sort-packages": true,
@@ -20,6 +35,8 @@
             "php": "8.1.0"
         }
     },
+    "minimum-stability": "stable",
+    "prefer-stable": true,
     "scripts": {
         "lint": "find . -type f -name '*.php' -not -path './vendor/*' -print0 | xargs -0 -n1 -P4 php -l",
         "analyse": "phpstan analyse --no-progress",
@@ -30,7 +47,12 @@
             "@lint",
             "@analyse",
             "@test"
-        ]
+        ],
+        "dmf:dev": "@php scripts/dmf-mode.php dev",
+        "dmf:release": "@php scripts/dmf-mode.php release",
+        "dmf:status": "@php scripts/dmf-mode.php status",
+        "dmf:build": "@php scripts/build-release.php",
+        "dmf:verify": "@php scripts/verify-release.php"
     },
     "scripts-descriptions": {
         "lint": "Syntax-check every PHP file.",
@@ -38,6 +60,26 @@
         "test": "Run the PHPUnit test suite.",
         "cs": "Report PSR-12 coding-standard violations.",
         "cs:fix": "Auto-fix coding-standard violations.",
-        "check": "Run lint + static analysis + tests."
+        "check": "Run lint + static analysis + tests.",
+        "dmf:dev": "Development mode — install dmf/core from the sibling ../dmf-core checkout, symlinked, so edits apply immediately.",
+        "dmf:release": "Release mode — install dmf/core from Git as real files. The default state of a fresh clone.",
+        "dmf:status": "Report the active mode and how dmf/core is currently installed.",
+        "dmf:build": "Build the deployable release ZIP into release/.",
+        "dmf:verify": "Verify a built artifact: composer dmf:verify -- --zip release/<file>.zip"
+    },
+    "extra": {
+        "dmf-release": {
+            "output": "release",
+            "include": [
+                { "from": "public_html", "to": "." },
+                { "from": "includes", "to": "includes" },
+                { "from": "config", "to": "config" },
+                { "from": "database", "to": "database" },
+                { "from": "storage", "to": "storage" },
+                { "from": "VERSION", "to": "VERSION" },
+                { "from": "CHANGELOG.md", "to": "CHANGELOG.md" },
+                { "from": ".env.example", "to": ".env.example" }
+            ]
+        }
     }
 }
