@@ -1,0 +1,162 @@
+# ==========================================================================
+#  Build — produce and verify the deployable release package
+#
+#  Runs on every push and pull request, not only on tags. Packaging breakage
+#  is then caught at review time rather than when someone is trying to cut a
+#  release; the artifact is downloadable from the run, so a reviewer can
+#  inspect exactly what would ship.
+#
+#  The build installs dmf/core FROM GIT — there is no sibling checkout of
+#  dmf-core anywhere in this workflow, and no path repository. That is the
+#  whole point: what CI builds is what a fresh clone builds.
+# ==========================================================================
+name: Build
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version label for the package (default: VERSION file)'
+        required: false
+        type: string
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Package
+    runs-on: ubuntu-latest
+    outputs:
+      artifact: ${{ steps.package.outputs.artifact }}
+      version:  ${{ steps.package.outputs.version }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # build-release.php records the commit
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: zip, pdo, json, hash
+          tools: composer:v2
+          coverage: none
+
+      - name: Cache Composer packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.composer/cache
+          key: composer-${{ hashFiles('composer.lock') }}
+          restore-keys: composer-
+
+      # The committed manifest must not contain a path repository. Checking it
+      # here as well as in build-release.php gives a clear, early CI failure
+      # with an explanation rather than a confusing one later in the build.
+      - name: Assert no path repository is committed
+        run: |
+          if php -r '
+              $m = json_decode(file_get_contents("composer.json"), true);
+              foreach ($m["repositories"] ?? [] as $r) {
+                  if (($r["type"] ?? "") === "path") { exit(0); }
+              }
+              exit(1);
+          '; then
+            echo "::error::composer.json declares a \"type\": \"path\" repository."
+            echo "::error::A path repository installs dmf/core as a symlink, which does not"
+            echo "::error::survive ZIP -> upload -> extract. Use development mode instead:"
+            echo "::error::  composer dmf:dev   (writes git-ignored composer-dev.json)"
+            exit 1
+          fi
+          echo "  ✓ composer.json declares no path repository"
+
+      - name: Assert composer.lock is committed
+        run: |
+          if ! git ls-files --error-unmatch composer.lock > /dev/null 2>&1; then
+            echo "::error::composer.lock is not tracked. Over a vcs repository the lock"
+            echo "::error::records a commit SHA and is reproducible — it must be committed."
+            exit 1
+          fi
+          echo "  ✓ composer.lock is tracked"
+
+      - name: Install dependencies
+        env:
+          # dmf/core is a private repository. COMPOSER_AUTH is read directly by
+          # Composer and leaves no auth.json behind, so nothing can be packaged
+          # by accident.
+          COMPOSER_AUTH: '{"github-oauth":{"github.com":"${{ secrets.DMF_CORE_TOKEN }}"}}'
+        run: |
+          composer install --no-interaction --prefer-dist --no-progress
+          echo "  ✓ dependencies installed from the committed lock"
+
+      - name: Confirm dmf/core installed as real files
+        run: |
+          if [ -L vendor/dmf/core ]; then
+            echo "::error::vendor/dmf/core is a symlink after a clean CI install."
+            exit 1
+          fi
+          echo "  ✓ vendor/dmf/core: $(find vendor/dmf/core -type f | wc -l) real files"
+
+      - name: Build the release package
+        id: package
+        env:
+          COMPOSER_AUTH: '{"github-oauth":{"github.com":"${{ secrets.DMF_CORE_TOKEN }}"}}'
+        run: |
+          VERSION="${{ inputs.version }}"
+          [ -z "$VERSION" ] && VERSION="$(tr -d '[:space:]' < VERSION)"
+
+          php scripts/build-release.php "$VERSION"
+
+          ZIP=$(find release -name '*.zip' -type f | head -1)
+          if [ -z "$ZIP" ]; then
+            echo "::error::Build produced no ZIP."
+            exit 1
+          fi
+
+          echo "version=${VERSION}"                        >> "$GITHUB_OUTPUT"
+          echo "artifact=release-package-${VERSION}"       >> "$GITHUB_OUTPUT"
+          echo "zip=${ZIP}"                                >> "$GITHUB_OUTPUT"
+
+      - name: Upload the package
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.artifact }}
+          path: |
+            release/*.zip
+            release/SHA256SUMS.txt
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Summary
+        run: |
+          {
+            echo "### 📦 Release package built"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Version | \`${{ steps.package.outputs.version }}\` |"
+            echo "| Package | \`$(basename "${{ steps.package.outputs.zip }}")\` |"
+            echo "| Size | $(du -h "${{ steps.package.outputs.zip }}" | cut -f1) |"
+            echo "| dmf/core | $(find vendor/dmf/core -type f | wc -l) real files |"
+            echo ""
+            echo "Download it from the **Artifacts** section of this run."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Independent verification of the uploaded artifact, using the same reusable
+  # workflow release.yml calls — so a PR is checked by exactly the rules that
+  # will gate the release.
+  verify:
+    name: Verify
+    needs: build
+    uses: ./.github/workflows/verify-release.yml
+    with:
+      artifact-name: ${{ needs.build.outputs.artifact }}

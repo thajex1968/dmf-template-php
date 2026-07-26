@@ -1,0 +1,123 @@
+# ==========================================================================
+#  Verify Release — the packaging gates
+#
+#  Single definition of what "a correct release artifact" means, called by
+#  both build.yml and release.yml so the rules cannot drift between them.
+#
+#  Runs scripts/verify-release.php against a built ZIP, then adds an
+#  independent no-symlink sweep using `unzip -l`, so a bug in the PHP checker
+#  cannot let a symlink through unnoticed.
+#
+#  Gates (see docs/platform/PRODUCTION_MODE.md §6):
+#    V1 no symlink entries      V5 no path repo in packaged composer.json
+#    V2 vendor/dmf/core present V6 autoloader resolves the core classes
+#    V3 Sanitizer.php present   V7 no dev files under vendor/dmf/core
+#    V4 install source ≠ path   V8 SHA-256 recorded
+# ==========================================================================
+name: Verify Release
+
+on:
+  workflow_call:
+    inputs:
+      artifact-name:
+        description: 'Name of the uploaded build artifact to verify'
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      artifact-name:
+        description: 'Name of a build artifact to verify'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify Artifact
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: zip, pdo, json, hash
+          coverage: none
+
+      - name: Download the built package
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: artifact
+
+      - name: Locate the ZIP
+        id: locate
+        run: |
+          ZIP=$(find artifact -name '*.zip' -type f | head -1)
+          if [ -z "$ZIP" ]; then
+            echo "::error::No .zip found in the downloaded artifact."
+            find artifact -type f | sed 's/^/    /'
+            exit 1
+          fi
+          echo "zip=${ZIP}" >> "$GITHUB_OUTPUT"
+          echo "Verifying: ${ZIP} ($(du -h "$ZIP" | cut -f1))"
+
+      - name: Run the verification gates
+        run: php scripts/verify-release.php --zip "${{ steps.locate.outputs.zip }}"
+
+      # An independent check with a different tool. verify-release.php reads
+      # the ZIP's external attributes; `unzip -l` parses the central directory
+      # separately, so agreement between them is meaningful.
+      - name: Independent symlink sweep
+        run: |
+          ZIP="${{ steps.locate.outputs.zip }}"
+          # A symlink entry has 'l' as the first character of its mode string.
+          if unzip -l "$ZIP" | grep -qE '^\s*l'; then
+            echo "::error::unzip reports symlink entries in the archive."
+            unzip -l "$ZIP" | grep -E '^\s*l' | sed 's/^/    /'
+            exit 1
+          fi
+          echo "  ✓ unzip confirms: no symlink entries"
+
+      - name: Confirm the payload extracts to real files
+        run: |
+          ZIP="${{ steps.locate.outputs.zip }}"
+          mkdir -p /tmp/extracted
+          unzip -q "$ZIP" -d /tmp/extracted
+
+          LINKS=$(find /tmp/extracted -type l)
+          if [ -n "$LINKS" ]; then
+            echo "::error::Symlinks present after extraction:"
+            echo "$LINKS" | sed 's/^/    /'
+            exit 1
+          fi
+
+          CORE=/tmp/extracted/vendor/dmf/core/src/Security/Sanitizer.php
+          if [ ! -s "$CORE" ]; then
+            echo "::error::$CORE is missing or empty after extraction."
+            echo "This is the production failure: vendor/dmf/core arrived empty."
+            ls -la /tmp/extracted/vendor/dmf/ 2>/dev/null || true
+            exit 1
+          fi
+
+          echo "  ✓ extracted cleanly, $(find /tmp/extracted -type f | wc -l) real files"
+          echo "  ✓ Sanitizer.php present ($(stat -c%s "$CORE") bytes)"
+
+      - name: Summary
+        run: |
+          ZIP="${{ steps.locate.outputs.zip }}"
+          {
+            echo "### ✅ Release artifact verified"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Package | \`$(basename "$ZIP")\` |"
+            echo "| Size | $(du -h "$ZIP" | cut -f1) |"
+            echo "| Files | $(find /tmp/extracted -type f | wc -l) |"
+            echo "| Symlinks | none |"
+            echo "| SHA-256 | \`$(sha256sum "$ZIP" | cut -d' ' -f1)\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
