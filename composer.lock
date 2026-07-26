@@ -8,7 +8,7 @@
     "packages": [
         {
             "name": "dmf/core",
-            "version": "v1.1.0",
+            "version": "v1.1.1",
             "source": {
                 "type": "git",
                 "url": "git@github.com:thajex1968/dmf-core.git",
@@ -81,7 +81,7 @@
                 "thailand"
             ],
             "support": {
-                "source": "https://github.com/thajex1968/dmf-core/tree/v1.1.0",
+                "source": "https://github.com/thajex1968/dmf-core/tree/v1.1.1",
                 "issues": "https://github.com/thajex1968/dmf-core/issues"
             },
             "time": "2026-06-28T13:01:44+00:00"
