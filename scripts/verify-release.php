@@ -121,6 +121,13 @@ final class ReleaseVerifier
 {
     private int $passed = 0;
 
+    /** Populated by assertInstalledJson() so V7 can diagnose precisely. */
+    private string $coreVersion = '';
+
+    private string $coreDistType = '';
+
+    private string $coreDistUrl = '';
+
     /** @var list<string> */
     private array $failures = [];
 
@@ -438,6 +445,11 @@ final class ReleaseVerifier
             $found    = true;
             $distType = $package['dist']['type'] ?? '(none)';
 
+            // Captured so V7 can diagnose rather than guess — see assertNoLeaks().
+            $this->coreVersion  = (string) ($package['version'] ?? '');
+            $this->coreDistType = (string) $distType;
+            $this->coreDistUrl  = (string) ($package['dist']['url'] ?? '');
+
             if ($distType === 'path') {
                 $this->fail('V4', sprintf(
                     'dmf/core was installed from a PATH repository (url: %s).',
@@ -491,20 +503,70 @@ final class ReleaseVerifier
         $this->pass('V5', 'Packaged composer.json declares no path repository');
     }
 
-    /** @param list<string> $leaked */
+    /**
+     * V7 — the installed dmf/core must match the published release contract.
+     *
+     * The contract (docs/platform/RELEASE_ARCHITECTURE.md §4) is that a release
+     * ships src/ plus its metadata files and nothing else. It is enforced by
+     * .gitattributes export-ignore, which `git archive` applies — both locally
+     * when building the Release Asset and server-side when GitHub generates the
+     * dist archive Composer downloads.
+     *
+     * ── WHY THIS FAILS, WHEN IT FAILS ───────────────────────────────────────
+     * export-ignore is applied from the tree AS IT EXISTED AT THE INSTALLED
+     * REF. It is not a repository-level setting and it is not retroactive: a
+     * tag cut before .gitattributes was added has no export-ignore rules in it,
+     * so its archive legitimately contains tests/ and docs/.
+     *
+     * That is the only realistic cause, and it is a version problem rather than
+     * a packaging problem — so this reports the installed version and the fix,
+     * instead of sending the reader off to inspect .gitattributes in a
+     * repository where it is very likely already correct.
+     *
+     * @param list<string> $leaked
+     */
     private function assertNoLeaks(array $leaked): void
     {
         if ($leaked === []) {
-            $this->pass('V7', 'No development files under vendor/dmf/core');
+            $this->pass('V7', sprintf(
+                'Release contract satisfied — no development files in dmf/core%s',
+                $this->coreVersion !== '' ? ' ' . $this->coreVersion : '',
+            ));
 
             return;
         }
 
-        $this->fail('V7', 'Development files shipped into vendor/dmf/core:');
+        $this->fail('V7', sprintf(
+            'dmf/core%s ships %d development path%s it should not:',
+            $this->coreVersion !== '' ? ' ' . $this->coreVersion : '',
+            count($leaked),
+            count($leaked) === 1 ? '' : 's',
+        ));
+
         foreach ($leaked as $path) {
             $this->detail($path);
         }
-        $this->detail('Check .gitattributes export-ignore in dmf-core.');
+
+        $this->detail('');
+
+        if ($this->coreDistType === 'path') {
+            // Already reported by V4; repeating the remedy here keeps each gate
+            // independently actionable.
+            $this->detail('Cause: installed from a path repository, which copies the');
+            $this->detail('working tree verbatim — export-ignore is never consulted.');
+            $this->detail('Fix:   composer dmf:release');
+
+            return;
+        }
+
+        $this->detail(sprintf(
+            'Cause: %s was tagged before .gitattributes existed, so the archive',
+            $this->coreVersion !== '' ? $this->coreVersion : 'the installed version',
+        ));
+        $this->detail('       carries no export-ignore rules. This is a version problem,');
+        $this->detail('       not a packaging problem — the rules are not retroactive.');
+        $this->detail('Fix:   require "dmf/core": "^1.1" (the first release built to the');
+        $this->detail('       contract), then composer update dmf/core');
     }
 
     /**
