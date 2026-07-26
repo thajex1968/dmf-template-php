@@ -42,13 +42,14 @@ jobs:
         run: composer validate --strict || echo "No composer.json yet — skipping."
 
       - name: Install dependencies
+        env:
+        COMPOSER_AUTH: '{"github-oauth":{"github.com":"${{ secrets.DMF_CORE_TOKEN }}"}}'
         run: |
           if [ -f composer.json ]; then
             composer install --prefer-dist --no-progress --no-interaction
           else
             echo "No composer.json yet — skipping install."
           fi
-
       - name: Check PHP syntax (lint)
         run: |
           find . -type f -name '*.php' \
