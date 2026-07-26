@@ -43,7 +43,7 @@ jobs:
 
       - name: Install dependencies
         env:
-        COMPOSER_AUTH: '{"github-oauth":{"github.com":"${{ secrets.DMF_CORE_TOKEN }}"}}'
+          COMPOSER_AUTH: '{"github-oauth":{"github.com":"${{ secrets.DMF_CORE_TOKEN }}"}}'
         run: |
           if [ -f composer.json ]; then
             composer install --prefer-dist --no-progress --no-interaction
