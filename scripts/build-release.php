@@ -27,6 +27,33 @@
  * tree AND the finished ZIP. A build that fails verification writes no
  * artifact and exits non-zero.
  *
+ * ── WHAT A RELEASE CARRIES (Specification v2) ───────────────────────────────
+ * Beside the payload the package ships four metadata files:
+ *
+ *   RELEASE_MANIFEST.json  canonical inventory — every payload file with its
+ *                          size, sha256, mode and generation order  (gate V12)
+ *   MANIFEST.sha256        `sha256sum -c` compatible checksums covering the
+ *                          payload and the canonical inventory
+ *   BUILD_INFO.json        schema v2 provenance: who built what from which
+ *                          commit, against which dmf/core, with which
+ *                          compatibility constraints and reproducibility
+ *                          attestation                    (gates V9, V10, V11, V13)
+ *   SHA256SUMS.txt         checksum of the archive itself (written beside it)
+ *
+ * The inventory and the checksums come from scripts/release-manifest.php, which
+ * is required as a library rather than shelled out to, so this build and the CI
+ * reproducibility gate compute them with the same code.
+ *
+ * ── REPRODUCIBILITY IS PROVEN, NOT CLAIMED ──────────────────────────────────
+ * BUILD_INFO.json asserts `reproducible_build.verified`, and gate V10 refuses a
+ * package whose attestation is absent or false. So the build genuinely builds
+ * TWICE — two independent staging directories, each installed from the
+ * committed lock — and compares them before stamping the attestation. A build
+ * that cannot reproduce itself writes no artifact.
+ *
+ * That is the whole cost of the guarantee: a release takes two composer
+ * installs. An artifact nobody can rebuild identically cannot be audited.
+ *
  * ── WHAT GETS PACKAGED ──────────────────────────────────────────────────────
  * Declared in composer.json under extra.dmf-release, so a project customises
  * its payload without editing this script:
@@ -49,6 +76,11 @@
 
 declare(strict_types=1);
 
+// The canonical inventory writer, the deterministic release UUID and the
+// double-build comparison all live here. It dispatches only when it is the
+// entry point, so requiring it defines the functions without running anything.
+require_once __DIR__ . '/release-manifest.php';
+
 const EXIT_OK    = 0;
 const EXIT_ERROR = 1;
 
@@ -62,6 +94,9 @@ final class ReleaseBuilder
     private string $version = '';
 
     private string $staging = '';
+
+    /** Second, independent build of the same commit — compared, then discarded. */
+    private string $control = '';
 
     private bool $skipZip = false;
 
@@ -86,9 +121,31 @@ final class ReleaseBuilder
             $this->heading(sprintf('Building release %s', $this->version));
 
             $this->preflight();
-            $this->stageDependencies();
-            $this->stagePayload();
-            $this->writeBuildInfo();
+
+            $this->staging = $this->stageBuild(verbose: true);
+
+            $this->info('Building a second time, to prove the build is reproducible...');
+            $this->control = $this->stageBuild(verbose: false);
+
+            $this->writeInventory($this->staging, quiet: false);
+            $this->writeInventory($this->control, quiet: true);
+
+            // Provisional provenance in both trees: the attestation must not
+            // claim "verified" before the comparison has actually passed, and
+            // compare() needs a BUILD_INFO.json on each side to compare.
+            $this->writeBuildInfo($this->staging, reproducible: false, quiet: true);
+            $this->writeBuildInfo($this->control, reproducible: false, quiet: true);
+
+            $this->assertReproducible();
+
+            // Re-stamp the artifact now the comparison has passed.
+            // BUILD_INFO.json is metadata and is excluded from the inventory by
+            // design, so rewriting it invalidates neither RELEASE_MANIFEST.json
+            // nor MANIFEST.sha256.
+            $this->writeBuildInfo($this->staging, reproducible: true, quiet: false);
+
+            $this->deleteTree($this->control);
+            $this->control = '';
 
             if (!$this->verify('--tree', $this->staging)) {
                 throw new RuntimeException('Staged tree failed verification — no artifact written.');
@@ -116,8 +173,11 @@ final class ReleaseBuilder
 
             return EXIT_ERROR;
         } finally {
-            if ($this->staging !== '' && !$this->skipZip) {
-                $this->deleteTree($this->staging);
+            // The control build is never an output, so it goes unconditionally.
+            foreach ([$this->control, $this->skipZip ? '' : $this->staging] as $temp) {
+                if ($temp !== '') {
+                    $this->deleteTree($temp);
+                }
             }
         }
     }
@@ -210,26 +270,33 @@ final class ReleaseBuilder
     // ── Staging ─────────────────────────────────────────────────────────────
 
     /**
-     * Install production dependencies into a clean directory.
+     * Produce one complete build — dependencies plus payload — in a fresh
+     * directory, and return where it landed.
      *
      * Only composer.json and composer.lock are copied in, so the result is a
      * function of the committed manifest alone and cannot inherit a symlinked
      * vendor/dmf/core from the developer's working tree.
+     *
+     * Called twice per release: once for the artifact, once as the control the
+     * reproducibility attestation is measured against. The control build is
+     * silent, because a duplicated build log reads like a bug.
      */
-    private function stageDependencies(): void
+    private function stageBuild(bool $verbose): string
     {
-        $this->staging = sys_get_temp_dir() . '/dmf-build-' . bin2hex(random_bytes(6));
+        $dir = sys_get_temp_dir() . '/dmf-build-' . bin2hex(random_bytes(6));
 
-        if (!mkdir($this->staging, 0o777, true) && !is_dir($this->staging)) {
+        if (!mkdir($dir, 0o777, true) && !is_dir($dir)) {
             throw new RuntimeException('Could not create the staging directory.');
         }
 
-        copy($this->root . '/composer.json', $this->staging . '/composer.json');
-        copy($this->root . '/composer.lock', $this->staging . '/composer.lock');
+        copy($this->root . '/composer.json', $dir . '/composer.json');
+        copy($this->root . '/composer.lock', $dir . '/composer.lock');
 
-        $this->info('Installing production dependencies (--no-dev --optimize-autoloader)...');
+        if ($verbose) {
+            $this->info('Installing production dependencies (--no-dev --optimize-autoloader)...');
+        }
 
-        $status = $this->runComposer([
+        $status = $this->runComposer($dir, $verbose, [
             'install',
             '--no-dev',
             '--optimize-autoloader',
@@ -245,17 +312,25 @@ final class ReleaseBuilder
             );
         }
 
-        $files = $this->countFiles($this->staging . '/vendor');
-        $this->ok(sprintf('vendor/ installed from the committed lock (%d files)', $files));
+        if ($verbose) {
+            $this->ok(sprintf(
+                'vendor/ installed from the committed lock (%d files)',
+                $this->countFiles($dir . '/vendor'),
+            ));
+        }
+
+        $this->stagePayload($dir, $verbose);
+
+        return $dir;
     }
 
-    private function stagePayload(): void
+    private function stagePayload(string $dir, bool $verbose): void
     {
         foreach ($this->includes() as $entry) {
             $from = $this->root . '/' . $entry['from'];
             $to   = $entry['to'] === '.'
-                ? $this->staging
-                : $this->staging . '/' . $entry['to'];
+                ? $dir
+                : $dir . '/' . $entry['to'];
 
             if (is_dir($from)) {
                 $this->copyTree($from, $to);
@@ -266,54 +341,190 @@ final class ReleaseBuilder
                 copy($from, $to);
             }
 
-            $this->ok(sprintf('%-24s → %s', $entry['from'], $entry['to']));
+            if ($verbose) {
+                $this->ok(sprintf('%-24s → %s', $entry['from'], $entry['to']));
+            }
+        }
+    }
+
+    // ── Specification v2 metadata ───────────────────────────────────────────
+
+    /**
+     * Write the canonical inventory: RELEASE_MANIFEST.json and MANIFEST.sha256.
+     *
+     * Verified by gate V12, which recomputes every hash from the EXTRACTED
+     * package rather than from the archive's central directory — so the
+     * inventory has to describe files as an operator on DirectAdmin will find
+     * them.
+     *
+     * The three metadata files exclude themselves from the inventory
+     * (METADATA_FILES in release-manifest.php). That is what lets
+     * BUILD_INFO.json be written, and later re-stamped, without invalidating
+     * anything already hashed.
+     */
+    private function writeInventory(string $dir, bool $quiet): void
+    {
+        if ($quiet) {
+            ob_start();
+        }
+
+        $status = commandGenerate([
+            'generate',
+            $dir,
+            // The application owns BUILD_INFO.json: only this build knows which
+            // dmf/core was staged, and that record is the point of the file.
+            '--no-build-info',
+            '--package=' . ($this->manifest['name'] ?? 'dmf/app'),
+            '--version=' . $this->version,
+        ]);
+
+        if ($quiet) {
+            ob_end_clean();
+        }
+
+        if ($status !== 0) {
+            throw new RuntimeException('Could not write the canonical release manifest.');
         }
     }
 
     /**
-     * Write provenance into the package.
+     * V10 — prove reproducibility instead of asserting it.
+     *
+     * The artifact claims `reproducible_build.verified`, and a claim nobody
+     * checked is worth nothing: the whole value of the attestation is that
+     * "this is what version X contains" can be confirmed by someone who does
+     * not trust the builder. So the release is built twice from the committed
+     * lock and the two builds are compared — identical inventories, identical
+     * checksum files, identical trees, and identical provenance once the
+     * timestamps are masked.
+     *
+     * The comparison is release-manifest.php's own `compare`, so a local build
+     * and a CI build attest to exactly the same property. A failure here is
+     * fatal: an artifact that cannot reproduce itself must never ship claiming
+     * that it can.
+     */
+    private function assertReproducible(): void
+    {
+        $this->info('Comparing two independent builds of the same commit...');
+
+        if (commandCompare(['compare', $this->staging, $this->control]) !== 0) {
+            throw new RuntimeException(
+                'The build is NOT reproducible — two builds of this commit differ (see above). '
+                . 'No artifact written.',
+            );
+        }
+    }
+
+    /**
+     * Write BUILD_INFO.json — schema v2 provenance.
      *
      * On DirectAdmin there is no SSH, no Composer and no git, so this file is
      * the only way to answer "what is actually running here?" months after a
      * deployment — and, critically, which dmf/core it was built against, which
      * is the first question when a library bug is suspected.
      *
-     * Verified by gate V9 in scripts/verify-release.php.
+     * Schema v2 is additive over v1: every v1 field is still present and keeps
+     * its meaning, so a consumer written against v1 keeps working. The
+     * additions are the release identity (release_uuid, manifest_sha256), the
+     * compatibility constraints the host must satisfy, and the reproducibility
+     * attestation.
+     *
+     * Verified by gates V9 (provenance), V11 (schema), V13 (compatibility) and
+     * V10 (reproducibility) in scripts/verify-release.php.
      */
-    private function writeBuildInfo(): void
+    private function writeBuildInfo(string $dir, bool $reproducible, bool $quiet): void
     {
         $env = static fn (string $k): string => (string) (getenv($k) ?: '');
 
+        $manifestPath = $dir . '/RELEASE_MANIFEST.json';
+
+        if (!is_file($manifestPath)) {
+            throw new RuntimeException('RELEASE_MANIFEST.json must exist before BUILD_INFO.json is written.');
+        }
+
+        /** @var array<string,mixed> $inventory */
+        $inventory   = json_decode((string) file_get_contents($manifestPath), true, 512, JSON_THROW_ON_ERROR);
+        $manifestSha = (string) hash_file('sha256', $manifestPath);
+
+        $core   = $this->coreProvenance($dir);
+        $now    = gmdate('Y-m-d\TH:i:s\Z');
+        $commit = $this->git('rev-parse HEAD');
+        $tag    = $this->git('describe --tags --exact-match');
+
+        // Outside CI there is no GITHUB_REPOSITORY, so fall back to the package
+        // name — release_uuid must be derived from values that are the same on
+        // every machine building this commit, or it is not deterministic.
+        $repository = $env('GITHUB_REPOSITORY') ?: (string) ($this->manifest['name'] ?? '');
+
         $info = [
+            // ── v1 fields, unchanged ──────────────────────────────────────────
             'application'      => $this->manifest['name'] ?? 'dmf/app',
             'version'          => $this->version,
-            'tag'              => $this->git('describe --tags --exact-match'),
-            'git_commit'       => $this->git('rev-parse HEAD'),
+            'tag'              => $tag,
+            'git_commit'       => $commit,
             'git_commit_short' => $this->git('rev-parse --short HEAD'),
             'git_branch'       => $this->git('rev-parse --abbrev-ref HEAD'),
-            'build_time_utc'   => gmdate('Y-m-d\TH:i:s\Z'),
+            'build_time_utc'   => $now,
             'builder'          => $env('GITHUB_ACTIONS') !== ''
                 ? 'GitHub Actions'
                 : 'scripts/build-release.php',
-            'github_run_id'     => $env('GITHUB_RUN_ID'),
-            'source_repository' => $env('GITHUB_REPOSITORY'),
-            'php_build'         => PHP_VERSION,
-            'mode'              => 'release',
-            'dependencies'      => ['dmf/core' => $this->coreProvenance()],
-            'zip_layout'        => 'flat (extract into ~/public_html/)',
+            'github_run_id'      => $env('GITHUB_RUN_ID'),
+            'github_run_attempt' => $env('GITHUB_RUN_ATTEMPT'),
+            'github_workflow'    => $env('GITHUB_WORKFLOW'),
+            'source_repository'  => $env('GITHUB_REPOSITORY'),
+            'php_build'          => PHP_VERSION,
+            'mode'               => 'release',
+            'dependencies'       => ['dmf/core' => $core],
+            'zip_layout'         => 'flat (extract into ~/public_html/)',
+
+            // ── v2 additions ──────────────────────────────────────────────────
+            'schema_version'   => 2,
+            'release_uuid'     => releaseUuid([
+                'repository' => $repository,
+                'tag'        => $tag,
+                'commit'     => $commit,
+            ]),
+            'generated_at'     => $now,
+            'release_manifest' => 'RELEASE_MANIFEST.json',
+            'manifest'         => 'MANIFEST.sha256',
+            'manifest_sha256'  => $manifestSha,
+            'content_sha256'   => $manifestSha,
+            'file_count'       => $inventory['file_count'] ?? 0,
+            'total_bytes'      => $inventory['total_bytes'] ?? 0,
+            'archive_sha256_published_in' => 'SHA256SUMS.txt',
+            'composer_install_source'     => $core['install_source'],
+            'compatibility'    => [
+                // The constraint the package actually declares — not a guess,
+                // so V13 fails a host that cannot run what was built.
+                'php'      => (string) ($this->manifest['require']['php'] ?? '^8.1'),
+                'composer' => '^2.0',
+                // Derived from the staged install, so it can never disagree
+                // with the library the package ships (V13 cross-checks it).
+                'dmf_core' => $core['version'],
+            ],
+            'reproducible_build' => [
+                'verified' => $reproducible,
+                'method'   => 'double-build comparison — two independent installs from the '
+                    . 'committed lock, compared file-by-file',
+                'excluded' => ['build_time_utc', 'generated_at'],
+            ],
         ];
 
-        file_put_contents(
-            $this->staging . '/BUILD_INFO.json',
-            json_encode($info, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n",
-        );
+        writeJson($dir . '/BUILD_INFO.json', $info);
 
-        $this->ok(sprintf('BUILD_INFO.json — %s @ %s', $this->version, $info['git_commit_short']));
+        if ($quiet) {
+            return;
+        }
+
+        $this->ok(sprintf('BUILD_INFO.json — schema v2, %s @ %s', $this->version, $info['git_commit_short']));
+        $this->ok(sprintf('  %-15s %s', 'release_uuid', $info['release_uuid']));
+        $this->ok(sprintf('  %-15s %s…', 'manifest_sha256', substr($manifestSha, 0, 16)));
         $this->ok(sprintf(
-            '  dmf/core %s via %s — sha %s…',
-            $info['dependencies']['dmf/core']['version'],
-            $info['dependencies']['dmf/core']['install_source'],
-            substr($info['dependencies']['dmf/core']['content_sha256'], 0, 12),
+            '  %-15s %s via %s — sha %s…',
+            'dmf/core',
+            $core['version'],
+            $core['install_source'],
+            substr($core['content_sha256'], 0, 12),
         ));
     }
 
@@ -328,7 +539,7 @@ final class ReleaseBuilder
      *
      * @return array{version: string, install_source: string, content_sha256: string}
      */
-    private function coreProvenance(): array
+    private function coreProvenance(string $dir): array
     {
         $result = [
             'version'        => 'unknown',
@@ -336,7 +547,7 @@ final class ReleaseBuilder
             'content_sha256' => 'unknown',
         ];
 
-        $installed = $this->staging . '/vendor/composer/installed.json';
+        $installed = $dir . '/vendor/composer/installed.json';
 
         if (is_file($installed)) {
             $decoded  = json_decode((string) file_get_contents($installed), true);
@@ -352,7 +563,7 @@ final class ReleaseBuilder
             }
         }
 
-        $coreDir = $this->staging . '/vendor/dmf/core';
+        $coreDir = $dir . '/vendor/dmf/core';
 
         if (is_dir($coreDir)) {
             $files = [];
@@ -453,6 +664,9 @@ final class ReleaseBuilder
         echo "    2. Navigate into ~/public_html/ and click Extract" . PHP_EOL;
         echo "    3. Configure .env, then remove the installer" . PHP_EOL;
         echo PHP_EOL;
+        echo "  Confirm the upload arrived intact (where a shell is available):" . PHP_EOL;
+        echo "    sha256sum -c MANIFEST.sha256" . PHP_EOL;
+        echo PHP_EOL;
         echo "  See docs/platform/DIRECTADMIN_GUIDE.md" . PHP_EOL;
     }
 
@@ -475,23 +689,61 @@ final class ReleaseBuilder
         );
     }
 
-    /** @param list<string> $args */
-    private function runComposer(array $args): int
+    /**
+     * @param bool         $verbose Stream Composer's output. The control build
+     *                              captures it instead and replays it only if
+     *                              the install fails — a second install log on
+     *                              a successful build reads like the build
+     *                              looping, but a failure must still be
+     *                              diagnosable.
+     *
+     *                              Capturing rather than discarding is what
+     *                              makes that safe: Composer writes its install
+     *                              log to STDERR, so there is no stream that
+     *                              can be silenced without also silencing the
+     *                              error.
+     * @param list<string> $args
+     */
+    private function runComposer(string $cwd, bool $verbose, array $args): int
     {
-        $composer  = $this->locateComposer();
-        $descriptors = [1 => STDOUT, 2 => STDERR];
+        $composer    = $this->locateComposer();
+        $descriptors = $verbose
+            ? [1 => STDOUT, 2 => STDERR]
+            : [1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
 
         $process = proc_open(
             array_merge($composer, $args),
             $descriptors,
             $pipes,
-            $this->staging,
+            $cwd,
             // COMPOSER is cleared so a developer with the dev manifest exported
             // in their shell cannot redirect the staged install to it.
             array_diff_key(getenv(), ['COMPOSER' => null]),
         );
 
-        return is_resource($process) ? proc_close($process) : 127;
+        if (!is_resource($process)) {
+            return 127;
+        }
+
+        if ($verbose) {
+            return proc_close($process);
+        }
+
+        // Drain both pipes before proc_close(), or a chatty install deadlocks
+        // once the pipe buffer fills.
+        $captured = '';
+        foreach ([1, 2] as $stream) {
+            $captured .= stream_get_contents($pipes[$stream]) ?: '';
+            fclose($pipes[$stream]);
+        }
+
+        $status = proc_close($process);
+
+        if ($status !== 0) {
+            fwrite(STDERR, $captured);
+        }
+
+        return $status;
     }
 
     /**

@@ -57,7 +57,14 @@ const METADATA_FILES = [
  */
 const DMF_UUID_NAMESPACE = '6ba7b812-9dad-11d1-80b4-00c04fd430c8';
 
-exit(main(array_slice($argv, 1)));
+// Dispatch only when this file is the entry point. Required as a library — which
+// is how build-release.php uses it — it exposes generate/verify/compare without
+// running anything, so the build and the reproducibility gate share one
+// implementation of the inventory, the UUID and the comparison instead of
+// re-deriving them.
+if (isset($argv[0]) && realpath($argv[0]) === __FILE__) {
+    exit(main(array_slice($argv, 1)));
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 
