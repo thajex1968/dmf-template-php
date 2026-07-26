@@ -8,16 +8,16 @@
     "packages": [
         {
             "name": "dmf/core",
-            "version": "v1.1.1",
+            "version": "v1.1.2",
             "source": {
                 "type": "git",
                 "url": "git@github.com:thajex1968/dmf-core.git",
-                "reference": "d661dd72ff5d45a7c321f9bf23a63bd141f13db7"
+                "reference": "6da476d403d1f0fdddff81c543778ec14361a550"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/thajex1968/dmf-core/zipball/d661dd72ff5d45a7c321f9bf23a63bd141f13db7",
-                "reference": "d661dd72ff5d45a7c321f9bf23a63bd141f13db7",
+                "url": "https://api.github.com/repos/thajex1968/dmf-core/zipball/6da476d403d1f0fdddff81c543778ec14361a550",
+                "reference": "6da476d403d1f0fdddff81c543778ec14361a550",
                 "shasum": ""
             },
             "require": {
@@ -28,13 +28,14 @@
             },
             "require-dev": {
                 "phpstan/phpstan": "^1.10",
-                "phpunit/phpunit": "^11.0",
+                "phpunit/phpunit": "^10.5 || ^11.0",
                 "squizlabs/php_codesniffer": "^3.9"
             },
             "type": "library",
             "extra": {
                 "branch-alias": {
-                    "dev-main": "1.0.x-dev"
+                    "dev-master": "1.1.x-dev",
+                    "dev-main": "1.1.x-dev"
                 }
             },
             "autoload": {
@@ -72,7 +73,7 @@
                 }
             ],
             "description": "DMF Platform Core — shared foundation for DMF school-management applications",
-            "homepage": "https://github.com/dmf-platform/dmf-core",
+            "homepage": "https://github.com/thajex1968/dmf-core",
             "keywords": [
                 "dmf",
                 "education",
@@ -81,10 +82,10 @@
                 "thailand"
             ],
             "support": {
-                "source": "https://github.com/thajex1968/dmf-core/tree/v1.1.1",
-                "issues": "https://github.com/thajex1968/dmf-core/issues"
+                "issues": "https://github.com/thajex1968/dmf-core/issues",
+                "source": "https://github.com/thajex1968/dmf-core"
             },
-            "time": "2026-06-28T13:01:44+00:00"
+            "time": "2026-07-26T13:21:53+00:00"
         }
     ],
     "packages-dev": [
